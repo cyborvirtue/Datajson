@@ -41,6 +41,7 @@ Datajson/
     config.py                 # App constants and JSON/image/text key lists
     models.py                 # Shared dataclasses for datasets and render blocks
     json_store.py             # JSON/JSONL loading, sample collections, cached file access
+    history.py                # Lightweight recent JSON path history
     blocks.py                 # Text/image detection, image path resolution, field flattening
     ui/
       theme.py                # Dark/light theme CSS and inline SVG icons
@@ -50,6 +51,8 @@ Datajson/
   environment.yml             # Conda environment definition
   requirements.txt            # pip dependencies
 ```
+
+Recent JSON paths are stored locally in `.datajson_history.json`; this file is ignored by git.
 
 ## Notes
 

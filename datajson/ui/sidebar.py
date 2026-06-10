@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 
 from datajson.config import DEFAULT_JSONL
+from datajson.history import load_path_history
 from datajson.json_store import (
     choose_auto_collection_path,
     file_stat,
@@ -52,9 +53,21 @@ def sidebar_controls() -> tuple[Path, str, str, bool, str | None, int, bool]:
     )
 
     default_path = DEFAULT_JSONL if Path(DEFAULT_JSONL).exists() else ""
-    path_text = st.sidebar.text_input("JSON / JSONL path", value=st.session_state.get("path_text", default_path))
-    if path_text != st.session_state.get("path_text"):
-        st.session_state.path_text = path_text
+    history = load_path_history()
+    path_options = history.copy()
+    if default_path and default_path not in path_options:
+        path_options.append(default_path)
+    path_text = st.sidebar.selectbox(
+        "JSON / JSONL path",
+        options=path_options,
+        index=0 if path_options else None,
+        accept_new_options=True,
+        placeholder="Type or select a recent JSON/JSONL path",
+        key="path_text",
+    )
+    path_text = path_text or ""
+    if path_text != st.session_state.get("_active_path_text"):
+        st.session_state._active_path_text = path_text
         st.session_state.sample_index = 0
         st.session_state.sample_index_input = 0
         st.session_state.collection_path = None

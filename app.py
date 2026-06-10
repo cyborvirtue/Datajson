@@ -4,6 +4,7 @@ import streamlit as st
 
 from datajson.blocks import build_render_blocks
 from datajson.config import APP_TITLE
+from datajson.history import record_path_history
 from datajson.json_store import create_dataset_info, dumps_json, load_current_sample, sample_count_from_info
 from datajson.ui.components import (
     render_blocks,
@@ -37,6 +38,7 @@ def main() -> None:
     except Exception as exc:
         st.error(f"Failed to parse dataset: {exc}")
         return
+    record_path_history(path)
 
     index = sample_navigation(sample_count_from_info(info))
     try:

@@ -30,8 +30,8 @@ def theme_vars(theme: str) -> dict[str, str]:
             "panel2": "#f7f2ff",
             "line": "rgba(88, 65, 140, .16)",
             "line_strong": "rgba(88, 65, 140, .25)",
-            "text": "#171422",
-            "muted": "#6f6680",
+            "text": "#24143f",
+            "muted": "#6b587f",
             "cyan": "#7c3aed",
             "green": "#0d9488",
             "amber": "#b7791f",
@@ -42,14 +42,16 @@ def theme_vars(theme: str) -> dict[str, str]:
             "card_bg": "rgba(124, 58, 237, .045)",
             "card_bg_strong": "rgba(255, 255, 255, .78)",
             "path_bg": "rgba(124, 58, 237, .055)",
-            "path_text": "#453b5f",
-            "chip_text": "#453b5f",
-            "text_body": "#242031",
-            "code_text": "#4c4564",
+            "path_text": "#3f2464",
+            "chip_text": "#3f2464",
+            "text_body": "#23113a",
+            "code_text": "#3f2a5f",
             "shadow": "0 22px 58px rgba(74, 48, 126, .12)",
             "missing_bg": "rgba(220, 76, 100, .055)",
             "input_bg": "rgba(255, 255, 255, .86)",
             "container_bg": "rgba(255,255,255,.72)",
+            "body_font": '"Comic Sans MS", "Comic Neue", "Trebuchet MS", ui-sans-serif, system-ui, sans-serif',
+            "display_font": '"Comic Sans MS", "Comic Neue", "Trebuchet MS", ui-sans-serif, system-ui, sans-serif',
         }
     return {
         "scheme": "dark",
@@ -78,6 +80,8 @@ def theme_vars(theme: str) -> dict[str, str]:
         "missing_bg": "rgba(255,123,111,.06)",
         "input_bg": "rgba(255,255,255,.045)",
         "container_bg": "rgba(15,19,23,.72)",
+        "body_font": 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        "display_font": 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }
 
 
@@ -110,10 +114,13 @@ CSS_TEMPLATE = """
   --missing-bg: __missing_bg__;
   --input-bg: __input_bg__;
   --container-bg: __container_bg__;
+  --body-font: __body_font__;
+  --display-font: __display_font__;
 }
 .stApp {
   background: var(--app-bg);
   color: var(--text);
+  font-family: var(--body-font);
 }
 [data-testid="stHeader"] {
   background: transparent;
@@ -121,6 +128,8 @@ CSS_TEMPLATE = """
 [data-testid="stSidebar"] {
   background: var(--sidebar-bg);
   border-right: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--body-font);
 }
 .block-container {
   max-width: none;
@@ -129,9 +138,27 @@ CSS_TEMPLATE = """
 }
 h1, h2, h3 {
   letter-spacing: 0;
+  color: var(--text);
+  font-family: var(--display-font);
 }
 code {
   color: var(--code-text);
+}
+.stMarkdown,
+.stMarkdown p,
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p,
+.stTabs [role="tab"] {
+  color: var(--text);
+  font-family: var(--body-font);
+}
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {
+  color: var(--muted);
 }
 .ui-icon {
   display: block;
@@ -144,6 +171,7 @@ code {
   color: var(--text);
   font-size: 20px;
   font-weight: 760;
+  font-family: var(--display-font);
 }
 .sidebar-title .ui-icon {
   color: var(--cyan);
@@ -163,6 +191,7 @@ code {
   align-items: center;
   font-weight: 720;
   font-size: 18px;
+  font-family: var(--display-font);
 }
 .brand-mark {
   width: 36px;
@@ -208,11 +237,14 @@ code {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
+  font-family: var(--display-font);
 }
 .metric-card strong {
   display: block;
   margin-top: 5px;
   font-size: 20px;
+  color: var(--text);
+  font-family: var(--display-font);
 }
 .sample-meta {
   display: flex;
@@ -272,6 +304,8 @@ code {
   font-size: 13px;
   letter-spacing: .05em;
   text-transform: uppercase;
+  color: var(--text);
+  font-family: var(--display-font);
 }
 .role-pill {
   border: 1px solid var(--line-strong);
@@ -293,6 +327,7 @@ code {
   font-size: 16px;
   line-height: 1.75;
   white-space: pre-wrap;
+  font-family: var(--body-font);
 }
 .image-frame {
   width: fit-content;
@@ -315,7 +350,7 @@ code {
 .status-pill {
   border-radius: 999px;
   padding: 4px 9px;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--display-font);
   font-size: 11px;
   font-weight: 750;
 }
@@ -422,11 +457,15 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
   background: var(--input-bg);
   color: var(--text);
   border-color: var(--line);
+  font-family: var(--body-font);
 }
 .stButton button,
 .stDownloadButton button {
   border-radius: 8px;
   border-color: var(--line-strong);
+  color: var(--text);
+  font-family: var(--display-font);
+  font-weight: 700;
 }
 .stButton button[kind="primary"] {
   background: var(--cyan);
