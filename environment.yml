@@ -1,0 +1,10 @@
+name: datajson-viewer
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pillow
+  - pip:
+      - streamlit>=1.37
+      - orjson>=3.10

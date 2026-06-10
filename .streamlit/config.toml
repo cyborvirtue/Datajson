@@ -1,0 +1,11 @@
+[theme]
+base = "dark"
+primaryColor = "#53d7e8"
+backgroundColor = "#080b0f"
+secondaryBackgroundColor = "#11161b"
+textColor = "#edf2f4"
+font = "sans serif"
+
+[server]
+fileWatcherType = "poll"
+maxUploadSize = 2048
