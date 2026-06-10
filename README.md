@@ -32,6 +32,25 @@ streamlit run app.py
 - Lets you switch between fixed-width image previews and full-column image previews.
 - Uses a reliable sample jump control: entering an index commits immediately, and the `Go to index` button forces the same state update.
 
+## Project structure
+
+```text
+Datajson/
+  app.py                      # Streamlit entrypoint and page orchestration
+  datajson/
+    config.py                 # App constants and JSON/image/text key lists
+    models.py                 # Shared dataclasses for datasets and render blocks
+    json_store.py             # JSON/JSONL loading, sample collections, cached file access
+    blocks.py                 # Text/image detection, image path resolution, field flattening
+    ui/
+      theme.py                # Dark/light theme CSS and inline SVG icons
+      sidebar.py              # Sidebar controls, display settings, sample navigation
+      components.py           # Main Streamlit render components
+  .streamlit/config.toml      # Streamlit theme/server defaults
+  environment.yml             # Conda environment definition
+  requirements.txt            # pip dependencies
+```
+
 ## Notes
 
 The translation tab is intentionally not enabled yet. The rendering pipeline already isolates text blocks, so a later translation feature can translate only the current sample or selected JSON paths without changing the parser.

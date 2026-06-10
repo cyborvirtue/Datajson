@@ -1,0 +1,2 @@
+"""Datajson Streamlit viewer package."""
+
