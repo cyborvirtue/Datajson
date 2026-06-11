@@ -1,6 +1,6 @@
 # Datajson
 
-Streamlit viewer for local JSON and JSONL multimodal datasets.
+Streamlit viewer for local JSON, JSONL, and Parquet multimodal datasets.
 
 ## Quick start
 
@@ -21,11 +21,14 @@ streamlit run app.py
 
 ## What it does
 
-- Reads local `.json`, `.jsonl`, and `.ndjson` files.
+- Reads local `.json`, `.jsonl`, `.ndjson`, and `.parquet` files.
+- Reads a folder path as a recursive collection of `.parquet` files.
 - Supports random access over JSONL records without loading the whole file into memory.
+- Supports random access over Parquet rows by reading only the row group containing the current sample.
 - Supports JSON roots that are either a single object, a list of samples, or a dictionary containing a sample list such as `data`, `samples`, `items`, or `records`.
 - Renders ordered text and image blocks from common multimodal structures such as `messages[].content[]`.
 - Falls back to recursive detection for other local JSON shapes.
+- Converts Parquet image bytes and Hugging Face-style `{bytes, path}` image structs into embedded previews.
 - Resolves relative images from the JSON file folder, an optional image root, and sample metadata such as `source_image_dir`.
 - Shows a missing-image panel when a path is detected but the local file is unavailable.
 - Provides dark and light UI themes from the sidebar.
@@ -40,7 +43,7 @@ Datajson/
   datajson/
     config.py                 # App constants and JSON/image/text key lists
     models.py                 # Shared dataclasses for datasets and render blocks
-    json_store.py             # JSON/JSONL loading, sample collections, cached file access
+    json_store.py             # JSON/JSONL/Parquet loading, sample collections, cached file access
     history.py                # Lightweight recent JSON path history
     blocks.py                 # Text/image detection, image path resolution, field flattening
     ui/
@@ -52,7 +55,7 @@ Datajson/
   requirements.txt            # pip dependencies
 ```
 
-Recent JSON paths are stored locally in `.datajson_history.json`; this file is ignored by git.
+Recent dataset paths are stored locally in `.datajson_history.json`; this file is ignored by git.
 
 ## Notes
 

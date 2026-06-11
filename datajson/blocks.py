@@ -9,6 +9,8 @@ from datajson.config import IMAGE_EXTS, IMAGE_KEYS, TEXT_KEYS
 from datajson.json_store import dumps_json
 from datajson.models import ImageRef, RenderBlock
 
+IMAGE_LABEL_RE = re.compile(r"\bImage\s*#\s*(\d+)\b", re.IGNORECASE)
+
 
 def preview_value(value: Any, limit: int = 180) -> str:
     if isinstance(value, str):
@@ -151,6 +153,51 @@ def first_existing_key(value: dict[str, Any], keys: Iterable[str]) -> Any:
     return None
 
 
+def resolve_sample_image_reference(raw: str, sample: Any) -> str | None:
+    if not isinstance(sample, dict):
+        return None
+    target = sample.get(raw.strip())
+    if isinstance(target, str) and looks_like_image_string(target):
+        return target
+    if isinstance(target, dict):
+        value = first_existing_key(target, ("data_url", "data_uri", "bytes", "path", "url", "uri", "image", "image_path"))
+        if isinstance(value, str) and looks_like_image_string(value):
+            return value
+    return None
+
+
+def canonical_image_label(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = IMAGE_LABEL_RE.search(value)
+    if not match:
+        return None
+    return f"Image #{int(match.group(1))}"
+
+
+def find_sample_image_references(text: str, sample: Any) -> list[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in IMAGE_LABEL_RE.finditer(text):
+        label = f"Image #{int(match.group(1))}"
+        if label in seen:
+            continue
+        raw = resolve_sample_image_reference(label, sample)
+        if raw is not None:
+            refs.append((label, raw))
+            seen.add(label)
+    return refs
+
+
+def remember_rendered_image_labels(blocks: Iterable[RenderBlock], rendered_labels: set[str]) -> None:
+    for block in blocks:
+        if block.kind not in {"image", "missing_image"}:
+            continue
+        label = canonical_image_label(block.label)
+        if label is not None:
+            rendered_labels.add(label)
+
+
 def block_from_image(
     raw: str,
     json_path: str,
@@ -200,28 +247,70 @@ def blocks_from_messages(sample: Any, json_file: Path, image_root: str) -> list[
         messages = sample.get("conversations")
         base_path = "conversations"
     if not isinstance(messages, list):
+        messages = sample.get("chats")
+        base_path = "chats"
+    if not isinstance(messages, list):
         return []
 
     blocks: list[RenderBlock] = []
+    rendered_image_labels: set[str] = set()
     for msg_idx, message in enumerate(messages):
         role = None
         content = message
         msg_path = f"{base_path}[{msg_idx}]"
+        item_type = ""
         if isinstance(message, dict):
             role = str(first_existing_key(message, ("role", "from", "speaker", "author")) or "")
+            item_type = str(message.get("type", "")).lower()
             content = first_existing_key(message, ("content", "value", "text", "message"))
 
         if isinstance(content, list):
             for item_idx, item in enumerate(content):
                 item_path = f"{msg_path}.content[{item_idx}]"
-                blocks.extend(blocks_from_typed_item(item, item_path, json_file, image_root, sample, role or None))
+                new_blocks = blocks_from_typed_item(item, item_path, json_file, image_root, sample, role or None)
+                blocks.extend(new_blocks)
+                remember_rendered_image_labels(new_blocks, rendered_image_labels)
         elif isinstance(content, str):
-            if looks_like_image_string(content):
-                blocks.append(block_from_image(content, f"{msg_path}.content", "image", json_file, image_root, sample, role or None))
+            referenced_image = resolve_sample_image_reference(content, sample)
+            if looks_like_image_string(content) or (item_type in {"image", "img", "picture", "photo"} and referenced_image):
+                new_blocks = [
+                    block_from_image(
+                        referenced_image or content,
+                        f"{msg_path}.content",
+                        "image",
+                        json_file,
+                        image_root,
+                        sample,
+                        role or None,
+                        content if referenced_image else None,
+                    )
+                ]
+                blocks.extend(new_blocks)
+                remember_rendered_image_labels(new_blocks, rendered_image_labels)
             else:
+                if msg_idx == 0 and (role or "").lower() in {"user", "human"}:
+                    for label, raw in find_sample_image_references(content, sample):
+                        if label in rendered_image_labels:
+                            continue
+                        new_blocks = [
+                            block_from_image(
+                                raw,
+                                f"{msg_path}.content.{label}",
+                                "image",
+                                json_file,
+                                image_root,
+                                sample,
+                                role or None,
+                                label,
+                            )
+                        ]
+                        blocks.extend(new_blocks)
+                        remember_rendered_image_labels(new_blocks, rendered_image_labels)
                 blocks.append(block_from_text(content, f"{msg_path}.content", "text", role or None))
         elif isinstance(content, dict):
-            blocks.extend(blocks_from_typed_item(content, f"{msg_path}.content", json_file, image_root, sample, role or None))
+            new_blocks = blocks_from_typed_item(content, f"{msg_path}.content", json_file, image_root, sample, role or None)
+            blocks.extend(new_blocks)
+            remember_rendered_image_labels(new_blocks, rendered_image_labels)
 
     return blocks
 
@@ -245,18 +334,22 @@ def blocks_from_typed_item(
     label = first_existing_key(item, ("label", "name", "title"))
 
     if item_type in {"image", "img", "picture", "photo"}:
-        raw = first_existing_key(item, ("path", "url", "uri", "image", "image_path", "file", "filename", "file_name"))
+        raw = first_existing_key(
+            item,
+            ("data_url", "data_uri", "bytes", "path", "url", "uri", "image", "image_path", "content", "file", "filename", "file_name"),
+        )
         if isinstance(raw, str):
+            referenced_image = resolve_sample_image_reference(raw, sample)
             return [
                 block_from_image(
-                    raw,
+                    referenced_image or raw,
                     f"{json_path}.{guess_child_key(item, raw)}",
                     item_type or "image",
                     json_file,
                     image_root,
                     sample,
                     role,
-                    str(label) if label is not None else None,
+                    str(label) if label is not None else (raw if referenced_image else None),
                 )
             ]
 
@@ -273,9 +366,10 @@ def blocks_from_typed_item(
                 )
             ]
 
-    raw = first_existing_key(item, ("path", "url", "uri", "image", "image_path", "file", "filename", "file_name"))
+    raw = first_existing_key(item, ("data_url", "data_uri", "bytes", "path", "url", "uri", "image", "image_path", "file", "filename", "file_name"))
     if isinstance(raw, str) and (looks_like_image_string(raw) or key_suggests_image(guess_child_key(item, raw))):
-        return [block_from_image(raw, f"{json_path}.{guess_child_key(item, raw)}", "image", json_file, image_root, sample, role)]
+        referenced_image = resolve_sample_image_reference(raw, sample)
+        return [block_from_image(referenced_image or raw, f"{json_path}.{guess_child_key(item, raw)}", "image", json_file, image_root, sample, role)]
 
     text_value = first_existing_key(item, ("text", "caption", "prompt", "content", "value"))
     if isinstance(text_value, str) and (len(text_value.strip()) > 8 or key_suggests_text(guess_child_key(item, text_value))):

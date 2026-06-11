@@ -5,7 +5,14 @@ import streamlit as st
 from datajson.blocks import build_render_blocks
 from datajson.config import APP_TITLE
 from datajson.history import record_path_history
-from datajson.json_store import create_dataset_info, dumps_json, load_current_sample, sample_count_from_info
+from datajson.json_store import (
+    create_dataset_info,
+    dumps_json,
+    infer_parser_mode,
+    load_current_sample,
+    sample_count_from_info,
+    sample_source_path,
+)
 from datajson.ui.components import (
     render_blocks,
     render_field_tree,
@@ -24,12 +31,13 @@ def main() -> None:
 
     path, parser_mode, image_root, show_inspector, collection_override, image_width, fit_images = sidebar_controls()
     if not str(path).strip():
-        st.warning("Enter a local JSON or JSONL file path in the sidebar.")
+        st.warning("Enter a local JSON, JSONL, or Parquet path in the sidebar.")
         return
     if not path.exists():
         st.error(f"File does not exist: {path}")
         return
-    if not path.is_file():
+    mode = infer_parser_mode(path, parser_mode)
+    if not path.is_file() and mode != "parquet":
         st.error(f"Path is not a file: {path}")
         return
 
@@ -47,7 +55,8 @@ def main() -> None:
         st.error(f"Failed to parse sample {index}: {exc}")
         return
 
-    blocks = build_render_blocks(sample, path, image_root)
+    source_path = sample_source_path(path, info, index)
+    blocks = build_render_blocks(sample, source_path, image_root)
     render_topbar(path)
     render_metrics(info, index, blocks, path)
     render_sample_meta(sample)

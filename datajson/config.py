@@ -23,6 +23,9 @@ IMAGE_KEYS = {
     "path",
     "url",
     "uri",
+    "data_url",
+    "data_uri",
+    "bytes",
     "filename",
     "file_name",
 }

@@ -86,6 +86,7 @@ def theme_vars(theme: str) -> dict[str, str]:
 
 
 CSS_TEMPLATE = """
+<meta name="google" content="notranslate">
 <style>
 :root {
   color-scheme: __scheme__;

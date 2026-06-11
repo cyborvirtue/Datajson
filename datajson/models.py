@@ -12,6 +12,17 @@ class DatasetInfo:
     offsets: tuple[int, ...] = ()
     collection_path: str = "$"
     parse_note: str = ""
+    source_count: int = 1
+    size_bytes: int = 0
+    parquet_files: tuple["ParquetFileInfo", ...] = ()
+
+
+@dataclass(frozen=True)
+class ParquetFileInfo:
+    path: str
+    size: int
+    mtime_ns: int
+    row_count: int
 
 
 @dataclass

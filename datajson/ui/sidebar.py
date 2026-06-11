@@ -54,15 +54,24 @@ def sidebar_controls() -> tuple[Path, str, str, bool, str | None, int, bool]:
 
     default_path = DEFAULT_JSONL if Path(DEFAULT_JSONL).exists() else ""
     history = load_path_history()
-    path_options = history.copy()
+    path_options = [""] + history.copy()
     if default_path and default_path not in path_options:
         path_options.append(default_path)
-    path_text = st.sidebar.selectbox(
-        "JSON / JSONL path",
+    recent_path = st.sidebar.selectbox(
+        "Recent dataset paths",
         options=path_options,
-        index=0 if path_options else None,
-        accept_new_options=True,
-        placeholder="Type or select a recent JSON/JSONL path",
+        index=0,
+        format_func=lambda value: value if value else "Type a path below",
+        key="recent_path_choice",
+    )
+    if recent_path and recent_path != st.session_state.get("_applied_recent_path"):
+        st.session_state.path_text = recent_path
+        st.session_state._applied_recent_path = recent_path
+    if "path_text" not in st.session_state:
+        st.session_state.path_text = default_path
+    path_text = st.sidebar.text_input(
+        "JSON / JSONL / Parquet path",
+        placeholder="Type or select a recent JSON/JSONL/Parquet path",
         key="path_text",
     )
     path_text = path_text or ""
@@ -72,7 +81,7 @@ def sidebar_controls() -> tuple[Path, str, str, bool, str | None, int, bool]:
         st.session_state.sample_index_input = 0
         st.session_state.collection_path = None
 
-    parser_mode = st.sidebar.selectbox("Parser", ("auto", "jsonl", "json"), index=0)
+    parser_mode = st.sidebar.selectbox("Parser", ("auto", "jsonl", "json", "parquet"), index=0)
     image_root = st.sidebar.text_input("Image root override", value=st.session_state.get("image_root", ""))
     st.session_state.image_root = image_root
 
@@ -92,7 +101,7 @@ def sidebar_controls() -> tuple[Path, str, str, bool, str | None, int, bool]:
 
     collection_override: str | None = None
     path = Path(path_text).expanduser()
-    if path.exists() and infer_parser_mode(path, parser_mode) == "json":
+    if path.exists() and path.is_file() and infer_parser_mode(path, parser_mode) == "json":
         try:
             size, mtime_ns = file_stat(str(path))
             root = load_json_root(str(path), size, mtime_ns)
@@ -134,11 +143,11 @@ def sample_navigation(sample_count: int) -> int:
         st.session_state._nav_sample_count = sample_count
 
     col_prev, col_next = st.sidebar.columns(2)
-    if col_prev.button("Prev", width="stretch", disabled=index <= 0):
+    if col_prev.button("Prev", use_container_width=True, disabled=index <= 0):
         st.session_state.sample_index = max(index - 1, 0)
         st.session_state.sample_index_input = st.session_state.sample_index
         st.rerun()
-    if col_next.button("Next", width="stretch", disabled=index >= sample_count - 1):
+    if col_next.button("Next", use_container_width=True, disabled=index >= sample_count - 1):
         st.session_state.sample_index = min(index + 1, sample_count - 1)
         st.session_state.sample_index_input = st.session_state.sample_index
         st.rerun()
@@ -154,7 +163,7 @@ def sample_navigation(sample_count: int) -> int:
         on_change=commit_sample_index,
         args=(sample_count,),
     )
-    if st.sidebar.button("Go to index", type="primary", width="stretch"):
+    if st.sidebar.button("Go to index", type="primary", use_container_width=True):
         commit_sample_index(sample_count)
         st.rerun()
     return sync_index(sample_count)

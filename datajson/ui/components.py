@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import html
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ def render_topbar(path: Path) -> None:
     <span class="brand-mark">{svg_icon("database", 20)}</span>
     <span>{APP_TITLE} multimodal dataset viewer</span>
   </div>
-  <div class="path-line">{safe_path}</div>
+  <div class="path-line notranslate" translate="no">{safe_path}</div>
 </div>
         """,
         unsafe_allow_html=True,
@@ -31,7 +32,8 @@ def render_topbar(path: Path) -> None:
 def render_metrics(info: DatasetInfo, index: int, blocks: list[RenderBlock], path: Path) -> None:
     missing_count = sum(1 for block in blocks if block.kind == "missing_image")
     image_count = sum(1 for block in blocks if block.kind in {"image", "missing_image"})
-    size_mb = path.stat().st_size / 1024 / 1024
+    size_bytes = info.size_bytes or path.stat().st_size
+    size_mb = size_bytes / 1024 / 1024
     cards = [
         ("format", info.format_name.upper()),
         ("sample", f"{index + 1:,} / {info.sample_count:,}"),
@@ -39,11 +41,15 @@ def render_metrics(info: DatasetInfo, index: int, blocks: list[RenderBlock], pat
         ("images", f"{image_count:,} / {missing_count:,} missing"),
     ]
     html_cards = "".join(
-        f'<div class="metric-card"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
+        f'<div class="metric-card notranslate" translate="no"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
         for label, value in cards
     )
     st.markdown(f'<div class="metric-row">{html_cards}</div>', unsafe_allow_html=True)
-    st.caption(f"File size: {size_mb:.2f} MB")
+    size_label = "Dataset size" if info.source_count > 1 or path.is_dir() else "File size"
+    caption = f"{size_label}: {size_mb:.2f} MB"
+    if info.parse_note:
+        caption = f"{caption} · {info.parse_note}"
+    st.caption(caption)
 
 
 def render_sample_meta(sample: Any) -> None:
@@ -51,7 +57,7 @@ def render_sample_meta(sample: Any) -> None:
     if not items:
         return
     chips = "".join(
-        f'<span class="meta-chip"><b>{html.escape(key)}</b> {html.escape(value)}</span>' for key, value in items
+        f'<span class="meta-chip notranslate" translate="no"><b>{html.escape(key)}</b> {html.escape(value)}</span>' for key, value in items
     )
     st.markdown(f'<div class="sample-meta">{chips}</div>', unsafe_allow_html=True)
 
@@ -69,7 +75,7 @@ def render_block_header(block: RenderBlock, idx: int) -> None:
     title = block.schema_name or block.kind
     st.markdown(
         f"""
-<div class="block-head">
+<div class="block-head notranslate" translate="no">
   <div class="block-title">
     <span class="kind-badge{missing_class}">{badge_text}</span>
     <strong>{idx + 1:02d} · {html.escape(title)}</strong>
@@ -85,7 +91,7 @@ def render_block_header(block: RenderBlock, idx: int) -> None:
 
 def render_text_block(block: RenderBlock) -> None:
     text = html.escape(str(block.value))
-    st.markdown(f'<div class="text-body">{text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="text-body notranslate" translate="no">{text}</div>', unsafe_allow_html=True)
 
 
 def render_missing_image(block: RenderBlock, image_width: int, fit_images: bool) -> None:
@@ -95,7 +101,7 @@ def render_missing_image(block: RenderBlock, image_width: int, fit_images: bool)
     width_style = "max-width: 100%;" if fit_images else f"max-width: {image_width}px;"
     st.markdown(
         f"""
-<div class="missing-box" style="{width_style}">
+<div class="missing-box notranslate" translate="no" style="{width_style}">
   <div class="missing-inner">
     <div class="missing-icon"></div>
     <strong>Image path detected, but the file is missing.</strong>
@@ -111,30 +117,42 @@ def render_missing_image(block: RenderBlock, image_width: int, fit_images: bool)
 def render_image_block(block: RenderBlock, image_width: int, fit_images: bool) -> None:
     assert block.image is not None
     ref = block.image
-    width: int | str = "stretch" if fit_images else image_width
     if ref.exists:
         if ref.resolved and ref.resolved.startswith("data:image/"):
-            st.image(ref.resolved, width=width)
+            render_streamlit_image(decode_data_url(ref.resolved), image_width, fit_images)
         elif ref.is_url:
-            st.image(ref.raw, width=width)
+            render_streamlit_image(ref.raw, image_width, fit_images)
         elif ref.resolved:
-            st.image(ref.resolved, width=width)
+            render_streamlit_image(ref.resolved, image_width, fit_images)
     else:
         render_missing_image(block, image_width, fit_images)
     status_class = "status-loaded" if ref.exists else "status-missing"
-    note = html.escape(ref.raw)
-    resolved = html.escape(ref.resolved or "")
+    note = html.escape("embedded image data" if ref.raw.startswith("data:image/") else ref.raw)
+    resolved_value = "embedded image data" if (ref.resolved or "").startswith("data:image/") else ref.resolved or ""
+    resolved = html.escape(resolved_value)
     status = html.escape(ref.status)
     st.markdown(
         f"""
-<div class="image-note">
+<div class="image-note notranslate" translate="no">
   <span>{note}</span>
   <span class="status-pill {status_class}">{status}</span>
 </div>
-<div class="small-muted">resolved: {resolved}</div>
+<div class="small-muted notranslate" translate="no">resolved: {resolved}</div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def decode_data_url(data_url: str) -> bytes:
+    _, encoded = data_url.split(",", 1)
+    return base64.b64decode(encoded)
+
+
+def render_streamlit_image(image: Any, image_width: int, fit_images: bool) -> None:
+    if fit_images:
+        st.image(image, use_column_width=True)
+    else:
+        st.image(image, width=image_width)
 
 
 def render_blocks(blocks: list[RenderBlock], image_width: int, fit_images: bool) -> None:
@@ -162,7 +180,7 @@ def render_inspector(blocks: list[RenderBlock], sample: Any, image_root: str) ->
         path = block.json_path
         st.markdown(
             f"""
-<div class="anchor-card">
+<div class="anchor-card notranslate" translate="no">
   <b><span class="anchor-dot{dot_class}"></span>{idx + 1:02d}. {html.escape(label)}</b>
   <code>{html.escape(path)}</code>
 </div>
@@ -180,6 +198,6 @@ def render_inspector(blocks: list[RenderBlock], sample: Any, image_root: str) ->
 
 def render_field_tree(sample: Any) -> None:
     rows = flatten_fields(sample)
-    st.dataframe(rows, width="stretch", hide_index=True)
+    st.dataframe(rows, use_container_width=True, hide_index=True)
     if len(rows) >= 500:
         st.caption("Field tree was truncated at 500 rows for UI responsiveness.")
