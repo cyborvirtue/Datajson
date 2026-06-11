@@ -35,6 +35,26 @@ streamlit run app.py
 - Lets you switch between fixed-width image previews and full-column image previews.
 - Uses a reliable sample jump control: entering an index commits immediately, and the `Go to index` button forces the same state update.
 
+## JSON recognition rules
+
+Dataset loading is separated from sample rendering:
+
+- `.jsonl` and `.ndjson` are read line by line with byte offsets for random sample access.
+- `.json` can be a single sample, a list of samples, or an object containing a sample list such as `data`, `samples`, `items`, `records`, `instances`, `examples`, `rows`, or `annotations`.
+- `.parquet` files and folders of `.parquet` files are read row by row; image bytes are converted to `data:image/...` previews when possible.
+
+For each sample, rendering prefers conversation-like structures first, then falls back to recursive field detection:
+
+- Conversation keys: `messages`, `conversations`, `chats`.
+- Role keys: `role`, `from`, `speaker`, `author`.
+- Text/content keys: `content`, `value`, `text`, `message`, `parts`, `contents`.
+- Image typed items: `image`, `img`, `picture`, `photo`, `input_image`, `image_url`, `input_image_url`, `local_image`.
+- Text typed items: `text`, `markdown`, `caption`, `input_text`, `output_text`.
+- Image path keys include `image`, `images`, `image_path`, `image_url`, `data_url`, `data_uri`, `path`, `url`, `uri`, `src`, `local_path`, `relative_path`, `file`, `filename`, `asset_path`, `media_path`, and related variants.
+- Text keys include `text`, `caption`, `prompt`, `instruction`, `question`, `answer`, `response`, `input`, `output`, `query`, `query_text`, `answer_text`, `ocr`, and `ground_truth`.
+
+Image references are resolved from direct paths, remote URLs, embedded `data:image/...` values, and sample-level image collections such as `images`, `image_paths`, `image_urls`, `original_images`, `input_images`, `source_images`, `assets`, and `meta.images`. The parser also recognizes labels and placeholders such as `Image #2`, `image_0`, `img1`, `图片1`, `<image>`, `<image_0>`, Markdown images, and HTML `<img src="...">`. Missing local paths are still rendered as missing-image blocks.
+
 ## Project structure
 
 ```text

@@ -10,6 +10,97 @@ from datajson.json_store import dumps_json
 from datajson.models import ImageRef, RenderBlock
 
 IMAGE_LABEL_RE = re.compile(r"\bImage\s*#\s*(\d+)\b", re.IGNORECASE)
+INDEXED_IMAGE_RE = re.compile(r"(?<![\w/.-])(?:image|img|pic|picture|photo)[\s_#:-]*(\d+)(?![\w/.-])", re.IGNORECASE)
+CHINESE_IMAGE_LABEL_RE = re.compile(r"(?:图片|图像|影像)\s*[#:_-]?\s*(\d+)")
+PLAIN_IMAGE_PLACEHOLDER_RE = re.compile(r"<\s*(?:image|img|pic|picture|photo)\s*/?\s*>|\[\s*(?:image|img|pic|picture|photo)\s*\]", re.IGNORECASE)
+INDEXED_IMAGE_PLACEHOLDER_RE = re.compile(
+    r"<\s*(?:image|img|pic|picture|photo)[\s_#:-]*(\d+)\s*/?\s*>|"
+    r"\[\s*(?:image|img|pic|picture|photo)[\s_#:-]*(\d+)\s*\]",
+    re.IGNORECASE,
+)
+MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+[\"'][^\"']*[\"'])?\)")
+HTML_IMAGE_RE = re.compile(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", re.IGNORECASE)
+
+IMAGE_RECORD_KEYS = (
+    "data_url",
+    "data_uri",
+    "image_url",
+    "image_uri",
+    "bytes",
+    "path",
+    "local_path",
+    "relative_path",
+    "url",
+    "uri",
+    "src",
+    "source",
+    "image",
+    "img",
+    "image_path",
+    "img_path",
+    "content",
+    "file",
+    "filepath",
+    "file_path",
+    "filename",
+    "file_name",
+    "image_file",
+    "image_filename",
+    "original_path",
+    "asset",
+    "asset_path",
+    "media",
+    "media_path",
+)
+IMAGE_COLLECTION_KEYS = (
+    "image",
+    "images",
+    "img",
+    "imgs",
+    "image_list",
+    "image_paths",
+    "image_urls",
+    "image_url",
+    "original_image",
+    "original_images",
+    "source_image",
+    "source_images",
+    "input_image",
+    "input_images",
+    "pictures",
+    "photos",
+    "media",
+    "assets",
+)
+TEXT_RECORD_KEYS = (
+    "text",
+    "content",
+    "value",
+    "caption",
+    "prompt",
+    "instruction",
+    "question",
+    "answer",
+    "response",
+    "input",
+    "output",
+    "query",
+    "query_text",
+    "answer_text",
+    "ocr",
+    "ground_truth",
+)
+IMAGE_TYPE_NAMES = {
+    "image",
+    "img",
+    "picture",
+    "photo",
+    "input_image",
+    "image_url",
+    "input_image_url",
+    "local_image",
+}
+TEXT_TYPE_NAMES = {"text", "markdown", "caption", "input_text", "output_text"}
 
 
 def preview_value(value: Any, limit: int = 180) -> str:
@@ -61,6 +152,45 @@ def key_suggests_text(key: str | None) -> bool:
     return lower in TEXT_KEYS or any(token in lower for token in ("caption", "prompt", "question"))
 
 
+def type_suggests_image(item_type: str | None) -> bool:
+    if not item_type:
+        return False
+    normalized = item_type.lower().replace("-", "_")
+    return normalized in IMAGE_TYPE_NAMES or normalized.endswith("_image") or normalized.endswith("_image_url")
+
+
+def type_suggests_text(item_type: str | None) -> bool:
+    if not item_type:
+        return False
+    normalized = item_type.lower().replace("-", "_")
+    return normalized in TEXT_TYPE_NAMES or normalized.endswith("_text")
+
+
+def first_existing_item(value: dict[str, Any], keys: Iterable[str]) -> tuple[str, Any] | None:
+    for key in keys:
+        if key in value and value[key] not in (None, ""):
+            return key, value[key]
+    lower_map = {str(key).lower(): key for key in value.keys()}
+    for key in keys:
+        actual = lower_map.get(key.lower())
+        if actual is not None and value[actual] not in (None, ""):
+            return str(actual), value[actual]
+    return None
+
+
+def value_is_usable_image_ref(value: str, key: str | None = None) -> bool:
+    text = normalize_path_text(value)
+    if not text:
+        return False
+    if looks_like_image_string(text) or is_url(text):
+        return True
+    if key and key.lower() in {"data", "base64", "bytes"}:
+        return False
+    if key_suggests_image(key) and len(text) <= 2048 and "\n" not in text:
+        return True
+    return False
+
+
 def discover_sample_image_dirs(sample: Any) -> list[str]:
     keys = {
         "source_image_dir",
@@ -70,6 +200,9 @@ def discover_sample_image_dirs(sample: Any) -> list[str]:
         "image_root",
         "root",
         "media_dir",
+        "asset_dir",
+        "assets_dir",
+        "data_dir",
     }
     found: list[str] = []
 
@@ -153,39 +286,276 @@ def first_existing_key(value: dict[str, Any], keys: Iterable[str]) -> Any:
     return None
 
 
-def resolve_sample_image_reference(raw: str, sample: Any) -> str | None:
-    if not isinstance(sample, dict):
+def canonical_image_label(value: str | None) -> str | None:
+    number = image_reference_number(value)
+    if number is None:
         return None
-    target = sample.get(raw.strip())
-    if isinstance(target, str) and looks_like_image_string(target):
-        return target
-    if isinstance(target, dict):
-        value = first_existing_key(target, ("data_url", "data_uri", "bytes", "path", "url", "uri", "image", "image_path"))
-        if isinstance(value, str) and looks_like_image_string(value):
-            return value
+    return f"Image #{number}"
+
+
+def image_reference_number(value: str | None) -> int | None:
+    if not value:
+        return None
+    text = value.strip()
+    for regex in (IMAGE_LABEL_RE, INDEXED_IMAGE_PLACEHOLDER_RE, INDEXED_IMAGE_RE, CHINESE_IMAGE_LABEL_RE):
+        match = regex.search(text)
+        if not match:
+            continue
+        for group in match.groups():
+            if group is not None:
+                return int(group)
     return None
 
 
-def canonical_image_label(value: str | None) -> str | None:
-    if not value:
+def image_reference_labels(value: str) -> list[str]:
+    raw = value.strip()
+    labels = [raw]
+    canonical = canonical_image_label(raw)
+    if canonical is not None:
+        labels.append(canonical)
+    number = image_reference_number(raw)
+    if number is not None:
+        labels.extend((f"image_{number}", f"img_{number}", f"image{number}", f"img{number}", f"图片{number}", f"图像{number}"))
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        if label and label not in seen:
+            seen.add(label)
+            unique.append(label)
+    return unique
+
+
+def image_value_from_source_dict(source: dict[str, Any]) -> str | None:
+    direct = image_value_from_record(source)
+    if direct is not None:
+        return direct
+    media_type = first_existing_key(source, ("media_type", "mime_type", "mime", "content_type"))
+    data = first_existing_key(source, ("data", "base64", "bytes"))
+    if isinstance(data, str) and data.startswith("data:image/"):
+        return data
+    if isinstance(media_type, str) and media_type.startswith("image/") and isinstance(data, str) and data.strip():
+        return f"data:{media_type};base64,{data.strip()}"
+    return None
+
+
+def image_value_from_record(record: Any) -> str | None:
+    if isinstance(record, str) and value_is_usable_image_ref(record):
+        return record
+    if not isinstance(record, dict):
         return None
-    match = IMAGE_LABEL_RE.search(value)
-    if not match:
+
+    nested = first_existing_key(record, ("image_url", "image", "source", "asset", "media"))
+    if isinstance(nested, dict):
+        nested_value = image_value_from_source_dict(nested)
+        if nested_value is not None:
+            return nested_value
+
+    item = first_existing_item(record, IMAGE_RECORD_KEYS)
+    if item is None:
         return None
-    return f"Image #{int(match.group(1))}"
+    key, value = item
+    if isinstance(value, dict):
+        return image_value_from_source_dict(value)
+    if isinstance(value, str) and value_is_usable_image_ref(value, key):
+        return value
+    return None
+
+
+def image_record_label(record: Any, fallback: str | None = None) -> str | None:
+    if isinstance(record, dict):
+        label = first_existing_key(record, ("label", "name", "title", "id", "image_id", "content"))
+        if isinstance(label, (str, int)):
+            return str(label)
+    return fallback
+
+
+def image_record_matches_label(record: Any, label: str) -> bool:
+    record_label = image_record_label(record)
+    if record_label is None:
+        return False
+    record_canonical = canonical_image_label(record_label)
+    label_canonical = canonical_image_label(label)
+    return record_label.strip() == label or (record_canonical is not None and record_canonical == label_canonical)
+
+
+def image_value_from_collection(collection: Any, label: str) -> str | None:
+    if isinstance(collection, dict):
+        direct = collection.get(label)
+        value = image_value_from_record(direct)
+        if value is None and isinstance(direct, str) and value_is_usable_image_ref(direct, label):
+            value = direct
+        if value is not None:
+            return value
+        for key, record in collection.items():
+            if str(key).strip() == label or canonical_image_label(str(key)) == label or image_record_matches_label(record, label):
+                value = image_value_from_record(record)
+                if value is None and isinstance(record, str) and value_is_usable_image_ref(record, str(key)):
+                    value = record
+                if value is not None:
+                    return value
+    elif isinstance(collection, list):
+        for record in collection:
+            if image_record_matches_label(record, label):
+                value = image_value_from_record(record)
+                if value is not None:
+                    return value
+    return None
+
+
+def iter_sample_image_collections(sample: dict[str, Any]) -> list[tuple[str, Any]]:
+    collections: list[tuple[str, Any]] = []
+
+    def add_from(mapping: dict[str, Any], prefix: str = "") -> None:
+        lower_map = {str(key).lower(): key for key in mapping.keys()}
+        for key in IMAGE_COLLECTION_KEYS:
+            actual = lower_map.get(key.lower())
+            if actual is not None and mapping[actual] not in (None, ""):
+                collections.append((f"{prefix}{actual}", mapping[actual]))
+
+    add_from(sample)
+    meta = sample.get("meta")
+    if isinstance(meta, dict):
+        add_from(meta, "meta.")
+    return collections
+
+
+def sample_image_candidates(sample: Any) -> list[tuple[str | None, str]]:
+    if not isinstance(sample, dict):
+        return []
+
+    candidates: list[tuple[str | None, str]] = []
+    seen: set[tuple[str | None, str]] = set()
+
+    def add(label: str | None, raw: str | None) -> None:
+        if raw is None:
+            return
+        marker = (label, raw)
+        if marker in seen:
+            return
+        seen.add(marker)
+        candidates.append(marker)
+
+    for collection_name, collection in iter_sample_image_collections(sample):
+        if isinstance(collection, (str, dict)):
+            raw = image_value_from_record(collection)
+            if raw is None and isinstance(collection, str) and value_is_usable_image_ref(collection, collection_name):
+                raw = collection
+            add(image_record_label(collection, collection_name), raw)
+        if isinstance(collection, dict):
+            for key, record in collection.items():
+                raw = image_value_from_record(record)
+                if raw is None and isinstance(record, str) and value_is_usable_image_ref(record, str(key)):
+                    raw = record
+                add(image_record_label(record, str(key)), raw)
+        elif isinstance(collection, list):
+            for idx, record in enumerate(collection):
+                raw = image_value_from_record(record)
+                if raw is None and isinstance(record, str) and value_is_usable_image_ref(record, collection_name):
+                    raw = record
+                add(image_record_label(record, f"Image #{idx + 1}"), raw)
+
+    return candidates
+
+
+def candidate_matches_label(candidate_label: str | None, label: str) -> bool:
+    if not candidate_label:
+        return False
+    candidate_canonical = canonical_image_label(candidate_label)
+    label_canonical = canonical_image_label(label)
+    return candidate_label.strip() == label or (candidate_canonical is not None and candidate_canonical == label_canonical)
+
+
+def resolve_sample_image_reference(raw: str, sample: Any) -> str | None:
+    if not isinstance(sample, dict):
+        return None
+
+    raw_text = normalize_path_text(raw)
+    if looks_like_image_string(raw_text) or is_url(raw_text) or raw_text.startswith("data:image/"):
+        return None
+
+    labels = image_reference_labels(raw_text)
+    for label in labels:
+        target = sample.get(label)
+        value = image_value_from_record(target)
+        if value is None and isinstance(target, str) and value_is_usable_image_ref(target, label):
+            value = target
+        if value is not None:
+            return value
+
+    meta = sample.get("meta") if isinstance(sample.get("meta"), dict) else {}
+    for collection in (
+        sample.get("images"),
+        sample.get("original_images"),
+        sample.get("image_list"),
+        sample.get("image_paths"),
+        sample.get("image_urls"),
+        sample.get("input_images"),
+        sample.get("source_images"),
+        sample.get("assets"),
+        sample.get("media"),
+        meta.get("images") if isinstance(meta, dict) else None,
+        meta.get("original_images") if isinstance(meta, dict) else None,
+        meta.get("image_paths") if isinstance(meta, dict) else None,
+        meta.get("image_urls") if isinstance(meta, dict) else None,
+    ):
+        for label in labels:
+            value = image_value_from_collection(collection, label)
+            if value is not None:
+                return value
+
+    candidates = sample_image_candidates(sample)
+    for label in labels:
+        for candidate_label, raw_value in candidates:
+            if candidate_matches_label(candidate_label, label):
+                return raw_value
+
+    number = image_reference_number(raw_text)
+    if number is not None and candidates:
+        ordered_indices = [number - 1] if number > 0 else []
+        ordered_indices.append(number)
+        for idx in ordered_indices:
+            if 0 <= idx < len(candidates):
+                return candidates[idx][1]
+    return None
 
 
 def find_sample_image_references(text: str, sample: Any) -> list[tuple[str, str]]:
     refs: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for match in IMAGE_LABEL_RE.finditer(text):
-        label = f"Image #{int(match.group(1))}"
-        if label in seen:
-            continue
-        raw = resolve_sample_image_reference(label, sample)
-        if raw is not None:
-            refs.append((label, raw))
-            seen.add(label)
+    seen: set[tuple[str, str]] = set()
+
+    def add(label: str, raw: str | None) -> None:
+        if raw is None:
+            return
+        marker = (label, raw)
+        if marker in seen:
+            return
+        refs.append(marker)
+        seen.add(marker)
+
+    for alt, raw in MARKDOWN_IMAGE_RE.findall(text):
+        label = alt.strip() or "markdown image"
+        add(label, raw.strip("<>\"'"))
+
+    for raw in HTML_IMAGE_RE.findall(text):
+        add("html image", raw.strip())
+
+    for regex in (IMAGE_LABEL_RE, INDEXED_IMAGE_PLACEHOLDER_RE, INDEXED_IMAGE_RE, CHINESE_IMAGE_LABEL_RE):
+        for match in regex.finditer(text):
+            token = match.group(0)
+            label = canonical_image_label(token) or token.strip()
+            add(label, resolve_sample_image_reference(token, sample))
+
+    candidates = sample_image_candidates(sample)
+    candidate_idx = 0
+    for match in PLAIN_IMAGE_PLACEHOLDER_RE.finditer(text):
+        while candidate_idx < len(candidates) and any(raw == candidates[candidate_idx][1] for _, raw in seen):
+            candidate_idx += 1
+        if candidate_idx >= len(candidates):
+            break
+        label, raw = candidates[candidate_idx]
+        add(label or "image placeholder", raw)
+        candidate_idx += 1
     return refs
 
 
@@ -193,9 +563,15 @@ def remember_rendered_image_labels(blocks: Iterable[RenderBlock], rendered_label
     for block in blocks:
         if block.kind not in {"image", "missing_image"}:
             continue
-        label = canonical_image_label(block.label)
+        label = canonical_image_label(block.label) or block.label
         if label is not None:
             rendered_labels.add(label)
+        if block.image is not None:
+            rendered_labels.add(f"raw:{normalize_path_text(block.image.raw)}")
+
+
+def image_reference_marker(label: str, raw: str) -> str:
+    return canonical_image_label(label) or f"raw:{normalize_path_text(raw)}"
 
 
 def block_from_image(
@@ -238,6 +614,28 @@ def block_from_text(
     )
 
 
+def blocks_from_text_references(
+    text: str,
+    json_path: str,
+    json_file: Path,
+    image_root: str,
+    sample: Any,
+    role: str | None = None,
+    rendered_image_labels: set[str] | None = None,
+) -> list[RenderBlock]:
+    blocks: list[RenderBlock] = []
+    for label, raw in find_sample_image_references(text, sample):
+        marker = image_reference_marker(label, raw)
+        raw_marker = f"raw:{normalize_path_text(raw)}"
+        if rendered_image_labels is not None and (marker in rendered_image_labels or raw_marker in rendered_image_labels):
+            continue
+        new_block = block_from_image(raw, f"{json_path}.{label}", "image", json_file, image_root, sample, role, label)
+        blocks.append(new_block)
+        if rendered_image_labels is not None:
+            remember_rendered_image_labels([new_block], rendered_image_labels)
+    return blocks
+
+
 def blocks_from_messages(sample: Any, json_file: Path, image_root: str) -> list[RenderBlock]:
     if not isinstance(sample, dict):
         return []
@@ -262,7 +660,7 @@ def blocks_from_messages(sample: Any, json_file: Path, image_root: str) -> list[
         if isinstance(message, dict):
             role = str(first_existing_key(message, ("role", "from", "speaker", "author")) or "")
             item_type = str(message.get("type", "")).lower()
-            content = first_existing_key(message, ("content", "value", "text", "message"))
+            content = first_existing_key(message, ("content", "value", "text", "message", "parts", "contents"))
 
         if isinstance(content, list):
             for item_idx, item in enumerate(content):
@@ -272,7 +670,9 @@ def blocks_from_messages(sample: Any, json_file: Path, image_root: str) -> list[
                 remember_rendered_image_labels(new_blocks, rendered_image_labels)
         elif isinstance(content, str):
             referenced_image = resolve_sample_image_reference(content, sample)
-            if looks_like_image_string(content) or (item_type in {"image", "img", "picture", "photo"} and referenced_image):
+            if looks_like_image_string(content) or (
+                type_suggests_image(item_type) and (referenced_image is not None or value_is_usable_image_ref(content, "image"))
+            ):
                 new_blocks = [
                     block_from_image(
                         referenced_image or content,
@@ -288,24 +688,17 @@ def blocks_from_messages(sample: Any, json_file: Path, image_root: str) -> list[
                 blocks.extend(new_blocks)
                 remember_rendered_image_labels(new_blocks, rendered_image_labels)
             else:
-                if msg_idx == 0 and (role or "").lower() in {"user", "human"}:
-                    for label, raw in find_sample_image_references(content, sample):
-                        if label in rendered_image_labels:
-                            continue
-                        new_blocks = [
-                            block_from_image(
-                                raw,
-                                f"{msg_path}.content.{label}",
-                                "image",
-                                json_file,
-                                image_root,
-                                sample,
-                                role or None,
-                                label,
-                            )
-                        ]
-                        blocks.extend(new_blocks)
-                        remember_rendered_image_labels(new_blocks, rendered_image_labels)
+                blocks.extend(
+                    blocks_from_text_references(
+                        content,
+                        f"{msg_path}.content",
+                        json_file,
+                        image_root,
+                        sample,
+                        role or None,
+                        rendered_image_labels,
+                    )
+                )
                 blocks.append(block_from_text(content, f"{msg_path}.content", "text", role or None))
         elif isinstance(content, dict):
             new_blocks = blocks_from_typed_item(content, f"{msg_path}.content", json_file, image_root, sample, role or None)
@@ -326,18 +719,18 @@ def blocks_from_typed_item(
     if isinstance(item, str):
         if looks_like_image_string(item):
             return [block_from_image(item, json_path, "image", json_file, image_root, sample, role)]
-        return [block_from_text(item, json_path, "text", role)]
+        reference_blocks = blocks_from_text_references(item, json_path, json_file, image_root, sample, role)
+        return [*reference_blocks, block_from_text(item, json_path, "text", role)]
     if not isinstance(item, dict):
         return []
 
     item_type = str(item.get("type", "")).lower()
     label = first_existing_key(item, ("label", "name", "title"))
 
-    if item_type in {"image", "img", "picture", "photo"}:
-        raw = first_existing_key(
-            item,
-            ("data_url", "data_uri", "bytes", "path", "url", "uri", "image", "image_path", "content", "file", "filename", "file_name"),
-        )
+    if type_suggests_image(item_type):
+        raw = image_value_from_record(item)
+        if raw is None:
+            raw = first_existing_key(item, IMAGE_RECORD_KEYS)
         if isinstance(raw, str):
             referenced_image = resolve_sample_image_reference(raw, sample)
             return [
@@ -353,10 +746,12 @@ def blocks_from_typed_item(
                 )
             ]
 
-    if item_type in {"text", "markdown", "caption"}:
-        text_value = first_existing_key(item, ("text", "content", "value", "caption"))
+    if type_suggests_text(item_type):
+        text_value = first_existing_key(item, TEXT_RECORD_KEYS)
         if isinstance(text_value, str):
+            reference_blocks = blocks_from_text_references(text_value, f"{json_path}.{guess_child_key(item, text_value)}", json_file, image_root, sample, role)
             return [
+                *reference_blocks,
                 block_from_text(
                     text_value,
                     f"{json_path}.{guess_child_key(item, text_value)}",
@@ -366,14 +761,22 @@ def blocks_from_typed_item(
                 )
             ]
 
-    raw = first_existing_key(item, ("data_url", "data_uri", "bytes", "path", "url", "uri", "image", "image_path", "file", "filename", "file_name"))
-    if isinstance(raw, str) and (looks_like_image_string(raw) or key_suggests_image(guess_child_key(item, raw))):
-        referenced_image = resolve_sample_image_reference(raw, sample)
-        return [block_from_image(referenced_image or raw, f"{json_path}.{guess_child_key(item, raw)}", "image", json_file, image_root, sample, role)]
+    image_item = first_existing_item(item, IMAGE_RECORD_KEYS)
+    if image_item is not None:
+        key, raw_value = image_item
+        raw = image_value_from_record(item)
+        if raw is None and isinstance(raw_value, dict):
+            raw = image_value_from_source_dict(raw_value)
+        if raw is None and isinstance(raw_value, str) and value_is_usable_image_ref(raw_value, key):
+            raw = raw_value
+        if isinstance(raw, str):
+            referenced_image = resolve_sample_image_reference(raw, sample)
+            return [block_from_image(referenced_image or raw, f"{json_path}.{key}", "image", json_file, image_root, sample, role)]
 
-    text_value = first_existing_key(item, ("text", "caption", "prompt", "content", "value"))
+    text_value = first_existing_key(item, TEXT_RECORD_KEYS)
     if isinstance(text_value, str) and (len(text_value.strip()) > 8 or key_suggests_text(guess_child_key(item, text_value))):
-        return [block_from_text(text_value, f"{json_path}.{guess_child_key(item, text_value)}", "text", role)]
+        reference_blocks = blocks_from_text_references(text_value, f"{json_path}.{guess_child_key(item, text_value)}", json_file, image_root, sample, role)
+        return [*reference_blocks, block_from_text(text_value, f"{json_path}.{guess_child_key(item, text_value)}", "text", role)]
 
     return []
 
@@ -406,10 +809,17 @@ def generic_blocks(sample: Any, json_file: Path, image_root: str, max_blocks: in
             for idx, child in enumerate(value):
                 walk(child, f"{path}[{idx}]", parent_key, role, depth + 1)
         elif isinstance(value, str):
-            if looks_like_image_string(value) or key_suggests_image(parent_key):
-                if looks_like_image_string(value):
-                    blocks.append(block_from_image(value, path, parent_key or "image", json_file, image_root, sample, role))
-            elif key_suggests_text(parent_key) or len(value.strip()) >= 60:
+            rendered_media = False
+            if looks_like_image_string(value):
+                blocks.append(block_from_image(value, path, parent_key or "image", json_file, image_root, sample, role))
+                rendered_media = True
+            elif key_suggests_image(parent_key) and value_is_usable_image_ref(value, parent_key):
+                referenced_image = resolve_sample_image_reference(value, sample)
+                blocks.append(block_from_image(referenced_image or value, path, parent_key or "image", json_file, image_root, sample, role))
+                rendered_media = True
+            else:
+                blocks.extend(blocks_from_text_references(value, path, json_file, image_root, sample, role))
+            if not rendered_media and (key_suggests_text(parent_key) or len(value.strip()) >= 60):
                 blocks.append(block_from_text(value, path, parent_key or "text", role))
 
     walk(sample, "$")
