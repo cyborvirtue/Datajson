@@ -91,7 +91,7 @@ def render_block_header(block: RenderBlock, idx: int) -> None:
 
 def render_text_block(block: RenderBlock) -> None:
     text = html.escape(str(block.value))
-    st.markdown(f'<div class="text-body notranslate" translate="no">{text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="text-body" translate="yes">{text}</div>', unsafe_allow_html=True)
 
 
 def render_missing_image(block: RenderBlock, image_width: int, fit_images: bool) -> None:
